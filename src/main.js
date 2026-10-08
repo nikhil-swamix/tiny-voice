@@ -3,18 +3,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { createIdleFade } from './idle.js';
-import markUrl from './assets/voice-mark.svg';
 import waveformUrl from './assets/waveform.svg';
 
 const $ = id => document.getElementById(id);
 const win = getCurrentWindow(), idle = createIdleFade(document.body);
 for (const event of ['pointermove', 'pointerdown', 'keydown', 'input', 'wheel', 'focusin']) document.addEventListener(event, idle.wake, { passive: true });
-let state = 'idle', stream, recorder, peer, sessionId, writes = Promise.resolve(), writeError, timer, cancelled = false, saveTask, storageTask, quitting = false, live = new Map(), processing = 0, pendingPaste = [], delivery = Promise.resolve(), mini = false, miniDim = false, miniHeight = 108, resizeQueued = false, viewChange = Promise.resolve();
-$('mark').src = markUrl; $('waveicon').src = waveformUrl;
-function setView(compact, dim = false, height = 108) {
-  mini = compact; miniDim = compact && dim; miniHeight = Math.max(108, Math.floor(height));
+let state = 'idle', stream, recorder, peer, sessionId, writes = Promise.resolve(), writeError, timer, cancelled = false, saveTask, storageTask, quitting = false, live = new Map(), processing = 0, pendingPaste = [], delivery = Promise.resolve(), mini = false, miniDim = false, miniHeight = 108, miniWidth = 180, resizeQueued = false, viewChange = Promise.resolve();
+$('waveicon').src = waveformUrl;
+function setView(compact, dim = false, height = 108, width = 180) {
+  mini = compact; miniDim = compact && dim; miniHeight = Math.max(108, Math.floor(height)); miniWidth = Math.max(180, Math.floor(width));
   document.body.classList.toggle('mini', compact); document.body.classList.toggle('dim', miniDim);
-  viewChange = viewChange.then(() => win.setSize(new LogicalSize(compact ? 180 : 300, compact ? miniHeight : 440))).catch(() => {});
+  viewChange = viewChange.then(() => win.setSize(new LogicalSize(compact ? miniWidth : 300, compact ? miniHeight : 440))).catch(() => {});
   if (compact) schedulePopoverResize();
   return viewChange;
 }
@@ -24,9 +23,10 @@ function schedulePopoverResize() {
   queueMicrotask(() => {
     resizeQueued = false;
     if (!mini) return;
-    const max = Math.max(108, Math.floor((window.screen?.availHeight || 800) * .75));
+    const max = Math.max(108, Math.floor((window.screen?.availHeight || 800) * .85));
     const height = Math.min(max, Math.max(108, $('popover').scrollHeight + 58));
-    if (Math.abs(height - miniHeight) > 10) void setView(true, miniDim, height);
+    const width = $('popover').dataset.hasContent === 'true' ? 240 : 180;
+    if (Math.abs(height - miniHeight) > 10 || width !== miniWidth) void setView(true, miniDim, height, width);
   });
 }
 function renderText(text) {
