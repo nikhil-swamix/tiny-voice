@@ -1,8 +1,11 @@
 import { chromium } from 'playwright-core';
 import assert from 'node:assert/strict';
 const browser = await chromium.connectOverCDP('http://127.0.0.1:9237');
-const pages = browser.contexts().flatMap(context => context.pages());
-const page = pages.find(page => page.url().startsWith('http://tauri.localhost'));
+let page;
+for (let attempt = 0; attempt < 50 && !page; attempt++) {
+  page = browser.contexts().flatMap(context => context.pages()).find(page => page.url().startsWith('http://tauri.localhost'));
+  if (!page) await new Promise(resolve => setTimeout(resolve, 200));
+}
 assert.ok(page, 'The executable must load its embedded UI, without a development server');
 await page.waitForFunction(() => document.getElementById('orb')?.dataset.state === 'idle' && document.getElementById('status')?.textContent.includes('Ctrl+Shift+Space'));
 const state = await page.evaluate(async () => {

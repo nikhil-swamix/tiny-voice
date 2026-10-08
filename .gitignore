@@ -11,4 +11,5 @@ recordings/
 *.pdb
 *.log
 widget-preview.png
+widget-output-*.png
 *.tmp
