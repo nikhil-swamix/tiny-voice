@@ -67,7 +67,7 @@ async fn load_history(b: &Backend, id: &str) -> Result<Vec<Value>, String> {
     Ok(history)
 }
 #[tauri::command] async fn finish_recording(id: String, mode: Option<String>, b: State<'_, Backend>) -> Result<Finished, String> {
-    let mode = mode.as_deref().unwrap_or("quick");
+    let mode = mode.as_deref().unwrap_or("pro");
     if !["quick", "pro"].contains(&mode) { return Err("Unknown output mode".into()); }
     let path = audio_path(&b, &id)?;
     let cache = b.dir.join(format!("{id}.raw.txt"));
@@ -89,7 +89,7 @@ async fn load_history(b: &Backend, id: &str) -> Result<Vec<Value>, String> {
         let response: Value = checked(b.client.post("https://api.openai.com/v1/responses").bearer_auth(key(&b)?)
             .json(&processing::request(&raw, &history, mode)).timeout(Duration::from_secs(240))
             .send().await.map_err(err)?).await?.json().await.map_err(err)?;
-        if response["status"] == "incomplete" { return Err("Processing reached its output limit; try Turbo for a larger output.".into()); }
+        if response["status"] == "incomplete" { return Err("Processing reached its output limit · audio and raw transcript retained.".into()); }
         let mut text = String::new();
         if let Some(output) = response["output"].as_array() { for item in output { if let Some(content) = item["content"].as_array() { for part in content {
             if part["type"] == "refusal" { return Err(part["refusal"].as_str().unwrap_or("The model declined this transcript").into()); }

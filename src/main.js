@@ -13,8 +13,11 @@ const win = getCurrentWindow(), idle = createIdleFade(document.body);
 for (const event of ['pointermove', 'pointerdown', 'keydown', 'input', 'wheel', 'focusin']) document.addEventListener(event, idle.wake, { passive: true });
 let state = 'idle', stream, recorder, peer, sessionId, writes = Promise.resolve(), writeError, timer, cancelled = false, saveTask, storageTask, quitting = false, live = new Map(), processing = 0, pendingPaste = [], delivery = Promise.resolve(), mini = false, miniDim = false, miniHeight = 108, miniWidth = 180, resizeQueued = false, viewChange = Promise.resolve();
 let meterStop, liveFrame;
-let outputMode = 'quick';
-try { if (localStorage.getItem('outputMode') === 'pro') outputMode = 'pro'; } catch {}
+let outputMode = 'pro';
+try {
+  if (localStorage.getItem('outputDefaults') === '0.2') outputMode = localStorage.getItem('outputMode') === 'quick' ? 'quick' : 'pro';
+  else { localStorage.setItem('outputMode', 'pro'); localStorage.setItem('outputDefaults', '0.2'); }
+} catch {}
 const inflight = new Map(), targets = new Map();
 const microphone = createMicrophone({
   getMedia: () => navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false }),
@@ -36,9 +39,11 @@ function schedulePopoverResize() {
     resizeQueued = false;
     if (!mini) return;
     const max = Math.max(108, Math.floor((window.screen?.availHeight || 800) * .85));
-    const height = Math.min(max, Math.max(108, $('popover').scrollHeight + 58));
-    const width = $('popover').dataset.hasContent === 'true' ? 240 : 180;
-    if (Math.abs(height - miniHeight) > 10 || width !== miniWidth) void setView(true, miniDim, height, width);
+    const content = $('popover').dataset.hasContent === 'true';
+    const width = content ? Math.max(180, Math.min(240, Math.floor((window.screen?.availWidth || 1024) * .85))) : 180;
+    if (width !== miniWidth) { void setView(true, miniDim, miniHeight, width).then(schedulePopoverResize); return; }
+    const height = content ? Math.min(max, Math.max(108, $('popover').scrollHeight + 41)) : 108;
+    if (Math.abs(height - miniHeight) > 2) void setView(true, miniDim, height, width);
   });
 }
 function renderText(text, markdown = false) {
@@ -59,7 +64,7 @@ function updateOutputControls() {
 }
 function updateEngine() {
   const activity = ({ starting: 'Starting microphone', recording: 'Recording your task', stopping: 'Saving audio', error: 'Waiting for a new recording' })[state]
-    || (inflight.size ? 'Refining output · high reasoning' : 'Idle · no task assigned');
+    || (inflight.size ? 'Refining output · medium reasoning' : 'Idle · no task assigned');
   const micState = microphone.ready ? 'mic ready' : 'mic off';
   $('engine').textContent = `${activity} · ${micState}`;
   $('meter').title = `${activity} · ${micState}`; $('meter').dataset.mic = microphone.ready ? 'ready' : 'off';
@@ -138,7 +143,7 @@ async function start() {
 async function processLast(id = sessionId, mode = outputMode, targetTask = targets.get(id)) {
   if (!id || ['recording', 'starting', 'stopping'].includes(state)) return;
   if (inflight.has(id)) return inflight.get(id);
-  processing++; $('status').textContent = `${mode === 'pro' ? 'Pro' : 'Quick'} · processing…`;
+  processing++; $('status').textContent = `${mode === 'pro' ? 'Turbo' : 'Quick'} · processing…`;
   const task = (async () => {
     try {
       const result = await invoke('finish_recording', { id, mode });
@@ -157,7 +162,7 @@ async function processLast(id = sessionId, mode = outputMode, targetTask = targe
       });
       const pasted = await delivery;
       if (id === sessionId && state !== 'recording' && state !== 'starting') {
-        $('status').textContent = result.warning || `${mode === 'pro' ? 'Pro' : 'Quick'} · ${pasted ? 'copied and pasted' : state === 'idle' ? 'copied · paste target unavailable' : 'copied · paste queued'}`;
+        $('status').textContent = result.warning || `${mode === 'pro' ? 'Turbo' : 'Quick'} · ${pasted ? 'copied and pasted' : state === 'idle' ? 'copied · paste target unavailable' : 'copied · paste queued'}`;
       }
     } catch (error) {
       if (id === sessionId && state !== 'recording' && state !== 'starting') $('status').textContent = String(error?.message || error);
@@ -214,6 +219,7 @@ $('minimize').onclick = () => void setView(true, false);
 $('hide').onclick = () => { if (state !== 'recording' && state !== 'stopping') { cancelled = state === 'starting'; microphone.release(); } void win.hide().catch(fail); };
 $('panel').addEventListener('click', event => { if (mini && !event.target.closest('button')) void setView(false); });
 window.addEventListener('blur', () => { void setView(true, true); });
+window.addEventListener('resize', schedulePopoverResize);
 window.addEventListener('pagehide', () => microphone.release());
 await listen('quit-requested', () => void quit());
 await listen('widget-shown', () => { idle.wake(); void setView(false); });

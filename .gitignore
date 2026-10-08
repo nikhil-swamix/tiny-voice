@@ -13,3 +13,5 @@ recordings/
 widget-preview.png
 widget-output-*.png
 *.tmp
+release/
+__pycache__/

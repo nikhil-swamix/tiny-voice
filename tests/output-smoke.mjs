@@ -10,6 +10,7 @@ const errors = []; page.on('pageerror', error => errors.push(error.message));
 await page.addInitScript(() => {
   window.smoke = { calls: [] };
   Object.defineProperty(window.screen, 'availHeight', { value: 1000 });
+  Object.defineProperty(window.screen, 'availWidth', { value: 1600 });
   const microphone = { getAudioTracks: () => [{ stop() {} }], getTracks: () => [{ stop() {} }] };
   Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: async () => microphone } });
   window.MediaRecorder = class {
@@ -31,7 +32,7 @@ await page.addInitScript(() => {
     if (name === 'plugin:window|set_size') return resizeWidget(args.value.size);
     if (name === 'begin_recording') return 'renderer-smoke';
     if (name === 'connect_realtime') return 'synthetic answer';
-    if (name === 'finish_recording') { await new Promise(resolve => setTimeout(resolve, 30)); return { text: args.mode === 'pro' ? pro : quick, intent: 'request', model: 'gpt-6.1-sol', reasoning: 'high' }; }
+    if (name === 'finish_recording') { await new Promise(resolve => setTimeout(resolve, 30)); return { text: smoke.output || (args.mode === 'pro' ? pro : quick), intent: 'request', model: 'gpt-6.1-sol', reasoning: 'medium' }; }
     if (name === 'capture_paste_target') return 321;
     if (name === 'paste_result') return true;
     if (['append_audio', 'copy_result', 'set_tray_state', 'recording_beep'].includes(name)) return;
@@ -42,6 +43,7 @@ await page.waitForFunction(() => document.getElementById('orb')?.dataset.state =
 try {
   await page.locator('#meter').click();
   await page.waitForFunction(() => !document.body.classList.contains('mini'));
+  assert.equal(await page.locator('[data-mode=pro]').getAttribute('aria-pressed'), 'true', 'Turbo is the default');
   await page.locator('[data-mode=quick]').click();
   await page.locator('#record').click();
   await page.waitForFunction(() => document.getElementById('orb').dataset.state === 'recording');
@@ -53,9 +55,19 @@ try {
   assert.equal(await page.evaluate(() => !!window.unsafe), false);
   assert.equal(await page.locator('#modes').isVisible(), false);
   await page.locator('#turbo').click();
-  await page.waitForFunction(() => document.getElementById('status').textContent.includes('Pro · copied and pasted'));
+  await page.waitForFunction(() => document.getElementById('status').textContent.includes('Turbo · copied and pasted'));
   assert.equal(await page.locator('body.mini').count(), 1, 'Turbo must not expand the mini bar');
   assert.equal(await page.locator('#popover h3').count(), 2);
+  await page.waitForFunction(() => innerWidth === 240);
+  const seam = await page.evaluate(() => {
+    const bar = document.getElementById('panel').getBoundingClientRect(), paper = document.getElementById('popover').getBoundingClientRect();
+    const style = getComputedStyle(document.getElementById('popover'));
+    return { barWidth: bar.width, paperWidth: paper.width, gap: paper.top - bar.bottom, left: paper.left - bar.left, topRadius: style.borderTopLeftRadius, opacity: style.opacity };
+  });
+  assert.equal(seam.barWidth, seam.paperWidth); assert.equal(seam.gap, 0); assert.equal(seam.left, 0);
+  assert.equal(seam.topRadius, '0px'); assert.equal(seam.opacity, '1', 'Fading applies once to the joined widget');
+  await page.evaluate(() => document.getElementById('minimize').click());
+  await page.waitForFunction(() => innerWidth === 240 && !document.body.classList.contains('dim'));
   await page.screenshot({ path: 'widget-output-mini.png', omitBackground: true });
   await page.locator('#meter').click();
   assert.equal(await page.locator('body.mini').count(), 0);
@@ -74,11 +86,18 @@ try {
   }));
   assert.deepEqual(result.requests, [['renderer-smoke', 'quick'], ['renderer-smoke', 'pro']]);
   assert.equal(result.copied, 2); assert.deepEqual(result.pasted, [321, 321]); assert.equal(result.hints, 3);
-  assert.equal(result.metadata, 'gpt-6.1-sol · high reasoning');
+  assert.equal(result.metadata, 'gpt-6.1-sol · medium reasoning');
   assert.equal(result.black, 'rgb(0, 0, 0)'); assert.equal(result.headerFits, true); assert.deepEqual(errors, []);
   await page.locator('#mic').click();
   assert.match(await page.locator('#engine').textContent(), /Idle · no task assigned · mic off/);
-  console.log(JSON.stringify(result));
+  await page.evaluate(() => { smoke.output = '## Large task\n' + Array.from({length: 100}, (_, index) => `  - Step ${index}: verify this part of the recorded task.`).join('\n'); });
+  await page.locator('#turbo').click();
+  await page.waitForFunction(() => innerHeight === 850);
+  assert.ok(await page.locator('#popover').evaluate(node => node.scrollHeight > node.clientHeight), 'Long output scrolls within the screen limit');
+  await page.evaluate(() => { smoke.output = '## Note\n  - Brief task.'; });
+  await page.locator('#turbo').click();
+  await page.waitForFunction(() => innerHeight === 108);
+  console.log(JSON.stringify({...result, seam, adaptiveHeight: '108–850'}));
 } finally {
   await browser.close();
 }

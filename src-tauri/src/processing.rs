@@ -14,9 +14,9 @@ pub fn request(raw: &str, history: &[Value], mode: &str) -> Value {
         "hints":{"type":"array","items":{"type":"string"}}
     },"required":["sections","intent","hints"],"additionalProperties":false});
     json!({"model":"gpt-6.1-sol","store":false,
-        "reasoning":{"effort":"high"},
+        "reasoning":{"effort":"medium"},
         "max_output_tokens":16384,
-        "instructions":format!("{COMMON}\n{}", if mode == "pro" { PRO } else { QUICK }),
+        "instructions":format!("{COMMON}\n{}\nPrefer clean output of at most 200 words, including headings and hints. Use fewer words for simple speech. Expand only when needed to preserve explicit requirements or the speaker asks for more detail. Never cut off a point or omit a constraint to meet the target. Keep suggested approaches and checks brief, specific and proportionate.", if mode == "pro" { PRO } else { QUICK }),
         "input":[{"role":"user","content":[{"type":"input_text","text":json!({"all_previous_transcripts":history,"recent_transcripts":recent,"current_transcript":raw}).to_string()}]}],
         "text":{"format":{"type":"json_schema","name":"voice_task","strict":true,"schema":schema}}
     })
@@ -69,7 +69,7 @@ pub fn format(value: Value, mode: &str) -> Result<(String, String), String> {
     #[test] fn modes_use_the_requested_model_and_supported_reasoning() {
         for mode in ["quick", "pro"] {
             let body = request("Use my corrected deadline", &[json!({"id":"a"})], mode);
-            assert_eq!(body["model"], "gpt-6.1-sol"); assert_eq!(body["reasoning"]["effort"], "high");
+            assert_eq!(body["model"], "gpt-6.1-sol"); assert_eq!(body["reasoning"]["effort"], "medium");
             assert!(body["input"].is_array()); assert!(body.get("temperature").is_none());
         }
     }
@@ -113,7 +113,8 @@ pub fn format(value: Value, mode: &str) -> Result<(String, String), String> {
                 let hints = output.split("  ## Hints\n\n").nth(1).unwrap();
                 assert_eq!(hints.lines().count(), if mode == "pro" { 3 } else { 1 });
                 assert!(!output.contains('\t')); assert!(!output.contains("[hint:"));
-                assert_eq!(data["model"], "gpt-6.1-sol"); assert_eq!(data["reasoning"]["effort"], "high");
+                assert_eq!(data["model"], "gpt-6.1-sol"); assert_eq!(data["reasoning"]["effort"], "medium");
+                assert!(output.split_whitespace().count() <= 200, "{mode} should respect the preferred word target for this short task");
                 println!("{mode}: provider model={}, reasoning={}, complete output ({} characters)", data["model"], data["reasoning"]["effort"], output.len());
             }
         });

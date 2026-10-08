@@ -44,7 +44,7 @@ async function harness(options = {}) {
     createMicrophone: args => createMicrophone({ ...args, schedule: (fn, delay) => { const timer = setTimeout(fn, delay); timer.unref(); return timer; } }),
     document: { getElementById: get, body: { classList: { toggle() {} } }, addEventListener() {} }, window: { screen: { availHeight: 800 }, addEventListener() {} },
     navigator: { mediaDevices: { getUserMedia: options.getMedia || (async () => { calls.push(['mic-request']); return micRequests++ ? makeMedia() : media; }) }, clipboard: {} },
-    localStorage: { getItem: () => options.mode || 'quick', setItem() {} },
+    localStorage: { getItem: key => key === 'outputDefaults' ? (options.legacy ? null : '0.2') : options.mode || null, setItem() {} },
     MediaRecorder: Recorder, RTCPeerConnection: Peer, Blob, Uint8Array, setTimeout, clearTimeout, queueMicrotask, requestAnimationFrame: fn => setTimeout(fn, 0), cancelAnimationFrame: clearTimeout, console
   });
   return { app, calls, nodes, media, options };
@@ -102,8 +102,8 @@ test('Tray quit saves the final audio without waiting for network transcription'
   assert.ok(!calls.some(([name]) => name === 'finish_recording'));
 });
 
-test('Quick is default and Turbo upgrades the same raw session to Pro with automatic delivery', async () => {
-  const { app, calls, nodes } = await harness(); await app.start(); await app.stop(); await settle();
+test('Quick selection and Turbo reprocessing deliver the same raw session', async () => {
+  const { app, calls, nodes } = await harness({ mode: 'quick' }); await app.start(); await app.stop(); await settle();
   await nodes.get('turbo').onclick(); await settle();
   assert.deepEqual(calls.filter(([name]) => name === 'finish_recording').map(([, args]) => [args.id, args.mode]), [['session', 'quick'], ['session', 'pro']]);
   assert.equal(calls.filter(([name]) => name === 'copy_result').length, 2);
@@ -151,4 +151,11 @@ test('losing the mic while recording saves captured audio and leaves it released
   media.getAudioTracks()[0].onended(); await settle();
   assert.equal(app.state, 'idle'); assert.ok(calls.some(([name]) => name === 'disk-written'));
   assert.ok(calls.some(([name]) => name === 'finish_recording')); assert.match(nodes.get('engine').textContent, /mic off/);
+});
+
+test('Turbo is default for fresh and legacy settings', async () => {
+  for (const options of [{}, {mode: 'quick', legacy: true}]) {
+    const {app, calls} = await harness(options); await app.start(); await app.stop(); await settle();
+    assert.equal(calls.find(([name]) => name === 'finish_recording')[1].mode, 'pro');
+  }
 });
