@@ -1,0 +1,47 @@
+# Tiny Voice
+
+Tiny Voice is a floating Windows voice widget that turns speech into structured task notes and pastes the result into the app you were using.
+
+![Tiny Voice product preview mockup](screenshots/product-preview.png)
+
+## What it does
+
+- Start or stop with `Ctrl+Shift+Space` or the widget button.
+- Stream a live transcript while recording, then format the complete transcript into task and stage bullets.
+- Add a short, task-specific hint to each processed transcript.
+- Copy and paste the finished note back into the most recently active app.
+- Collapse to a compact floating view on focus loss or after a transcript finishes. Click it to expand.
+- Save audio and transcript history locally, with a tray icon for quick access.
+
+OpenAI is used for transcription and transcript formatting. It does not answer the spoken request or perform tasks. To preserve context, postprocessing sends the current transcript, the saved transcript archive, and the latest ten transcripts to the OpenAI API. Local audio files remain in the recordings folder; audio is also sent to OpenAI for transcription. The API key is read from `OPENAI_API_KEY` at launch and is never placed in the WebView.
+
+## Run on Windows
+
+Requirements: Node.js, Rust with the MSVC toolchain, and WebView2.
+
+```powershell
+git clone https://github.com/nikhil-swamix/tiny-voice.git
+cd tiny-voice
+npm install
+$env:OPENAI_API_KEY = Read-Host 'OpenAI API key'
+npm run desktop
+```
+
+The standalone debug build is written to `src-tauri/target/debug/tiny-voice.exe`. A production build is available with `npm run desktop:release`.
+
+The app stores recordings and transcripts in `%LOCALAPPDATA%/com.local.tinyvoice/recordings`. Audio is retained until you remove it. Live transcription and final file transcription each send audio to OpenAI; the final formatting request includes the saved transcript context described above. The native clipboard helper pastes only when Windows can restore the previously active app.
+
+## Product images
+
+- `screenshots/product-preview.png` is a product-oriented interface mockup.
+- `screenshots/widget-crop.png` is the auto-cropped widget detail from that mockup.
+- Regenerate them on Windows with `python -m pip install Pillow` and `python scripts/create_preview.py`.
+
+## Development
+
+```powershell
+npm install
+npm run dev
+```
+
+To build the desktop app, use `npm run desktop`. Recordings, API credentials, generated binaries, and Rust build output are excluded from Git.
