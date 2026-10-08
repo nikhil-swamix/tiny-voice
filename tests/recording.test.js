@@ -7,11 +7,11 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 async function harness(options = {}) {
   const calls = [], nodes = new Map(), track = { stop() { calls.push(['mic-stopped']); } };
   const media = { getAudioTracks: () => [track], getTracks: () => [track] };
-  const get = id => { if (!nodes.has(id)) nodes.set(id, { dataset: {}, value: '', textContent: '', classList: { toggle() {} }, setAttribute() {}, addEventListener() {} }); return nodes.get(id); };
+  const get = id => { if (!nodes.has(id)) nodes.set(id, { dataset: {}, value: '', textContent: '', scrollHeight: 0, classList: { toggle() {} }, setAttribute() {}, addEventListener() {} }); return nodes.get(id); };
   class Recorder {
     static isTypeSupported() { return true; }
     constructor() { this.state = 'inactive'; }
-    start() { this.state = 'recording'; }
+    start() { this.state = 'recording'; calls.push(['media-start']); }
     stop() { this.state = 'inactive'; this.ondataavailable({ data: new Blob(['final audio']) }); queueMicrotask(() => this.onstop()); }
   }
   class Peer {
@@ -21,7 +21,7 @@ async function harness(options = {}) {
   const invoke = async (name, args) => {
     calls.push([name, args]);
     if (name === 'startup_status') return 'Ready';
-    if (name === 'begin_recording') return 'session';
+    if (name === 'begin_recording') { if (options.beginGate) await options.beginGate; return 'session'; }
     if (name === 'connect_realtime') { if (options.streamFail) throw Error('stream offline'); return 'answer'; }
     if (name === 'append_audio') { await tick(); if (options.diskFail) throw Error('disk full'); calls.push(['disk-written']); }
     if (name === 'finish_recording') { if (options.apiFail) throw Error('API offline'); return { text: 'Clean transcript', intent: 'request' }; }
@@ -29,8 +29,8 @@ async function harness(options = {}) {
   };
   const source = (await readFile(new URL('../src/main.js', import.meta.url), 'utf8')).replace(/^import .*;\r?\n/gm, '');
   const app = await vm.runInNewContext(`(async()=>{${source}\nreturn { toggle, start, stop, quit, processLast, get state(){return state} };})()`, {
-    invoke, listen: async () => {}, getCurrentWindow: () => ({ setSize: async () => {} }), LogicalSize: class {}, createIdleFade: () => ({ wake() {}, dispose() {} }),
-    document: { getElementById: get, body: { classList: { toggle() {} } }, addEventListener() {} }, window: { addEventListener() {} },
+    invoke, listen: async () => {}, markUrl: 'mark.svg', waveformUrl: 'wave.svg', getCurrentWindow: () => ({ setSize: async () => {} }), LogicalSize: class {}, createIdleFade: () => ({ wake() {}, dispose() {} }),
+    document: { getElementById: get, body: { classList: { toggle() {} } }, addEventListener() {} }, window: { screen: { availHeight: 800 }, addEventListener() {} },
     navigator: { mediaDevices: { getUserMedia: options.getMedia || (async () => media) }, clipboard: {} },
     MediaRecorder: Recorder, RTCPeerConnection: Peer, Blob, Uint8Array, setTimeout, clearTimeout, queueMicrotask, console
   });
@@ -54,6 +54,18 @@ test('same hotkey cancels a pending microphone start', async () => {
   assert.equal(app.state, 'idle'); assert.ok(!calls.some(([name]) => name === 'begin_recording'));
   assert.ok(calls.some(([name]) => name === 'mic-stopped'));
   assert.ok(!calls.some(([name]) => name === 'recording_beep'));
+});
+test('audio capture starts before the storage session request finishes', async () => {
+  let begin;
+  const beginGate = new Promise(resolve => { begin = resolve; });
+  const { app, calls } = await harness({ beginGate });
+  const starting = app.start();
+  await settle();
+  assert.equal(app.state, 'recording');
+  assert.ok(calls.findIndex(([name]) => name === 'media-start') < calls.findIndex(([name]) => name === 'begin_recording'));
+  begin();
+  await starting;
+  await app.stop();
 });
 test('stream failure keeps local recording and allows final transcription', async () => {
   const { app, calls } = await harness({ streamFail: true }); await app.start(); await tick();

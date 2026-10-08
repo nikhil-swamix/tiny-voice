@@ -3,22 +3,39 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { createIdleFade } from './idle.js';
+import markUrl from './assets/voice-mark.svg';
+import waveformUrl from './assets/waveform.svg';
 
 const $ = id => document.getElementById(id);
 const win = getCurrentWindow(), idle = createIdleFade(document.body);
 for (const event of ['pointermove', 'pointerdown', 'keydown', 'input', 'wheel', 'focusin']) document.addEventListener(event, idle.wake, { passive: true });
-let state = 'idle', stream, recorder, peer, sessionId, writes = Promise.resolve(), writeError, timer, cancelled = false, saveTask, quitting = false, live = new Map(), processing = 0, pendingPaste = [], delivery = Promise.resolve(), mini = false, viewChange = Promise.resolve();
-function setView(compact, dim = false) {
-  mini = compact; document.body.classList.toggle('mini', compact); document.body.classList.toggle('dim', compact && dim);
-  viewChange = viewChange.then(() => win.setSize(new LogicalSize(compact ? 240 : 300, compact ? 144 : 440))).catch(() => {});
+let state = 'idle', stream, recorder, peer, sessionId, writes = Promise.resolve(), writeError, timer, cancelled = false, saveTask, storageTask, quitting = false, live = new Map(), processing = 0, pendingPaste = [], delivery = Promise.resolve(), mini = false, miniDim = false, miniHeight = 108, resizeQueued = false, viewChange = Promise.resolve();
+$('mark').src = markUrl; $('waveicon').src = waveformUrl;
+function setView(compact, dim = false, height = 108) {
+  mini = compact; miniDim = compact && dim; miniHeight = Math.max(108, Math.floor(height));
+  document.body.classList.toggle('mini', compact); document.body.classList.toggle('dim', miniDim);
+  viewChange = viewChange.then(() => win.setSize(new LogicalSize(compact ? 180 : 300, compact ? miniHeight : 440))).catch(() => {});
+  if (compact) schedulePopoverResize();
   return viewChange;
+}
+function schedulePopoverResize() {
+  if (!mini || resizeQueued) return;
+  resizeQueued = true;
+  queueMicrotask(() => {
+    resizeQueued = false;
+    if (!mini) return;
+    const max = Math.max(108, Math.floor((window.screen?.availHeight || 800) * .75));
+    const height = Math.min(max, Math.max(108, $('popover').scrollHeight + 58));
+    if (Math.abs(height - miniHeight) > 10) void setView(true, miniDim, height);
+  });
 }
 function renderText(text) {
   $('text').value = text; $('popover').textContent = text;
   $('popover').dataset.hasContent = text ? 'true' : 'false';
+  schedulePopoverResize();
 }
 const status = (message, next = state) => {
-  state = next; $('status').textContent = message; $('orb').dataset.state = next; $('orb').title = message;
+  state = next; $('status').textContent = message; $('orb').dataset.state = next; $('orb').title = next === 'recording' ? 'Stop recording' : 'Start recording';
   $('orb').setAttribute('aria-label', next === 'recording' ? 'Stop recording' : 'Start recording');
   $('record').dataset.state = next; $('record').textContent = ({recording:'Stop recording',starting:'Cancel',stopping:'Saving…',processing:'Processing…'})[next] || 'Record';
   $('record').disabled = $('orb').disabled = next === 'stopping';
@@ -50,25 +67,36 @@ async function connectRealtime(id, media) {
 }
 
 async function start() {
-  cancelled = false; status('Starting microphone…', 'starting'); live.clear(); renderText(''); if (mini) document.body.classList.remove('dim');
+  cancelled = false; sessionId = undefined; storageTask = undefined; writes = Promise.resolve(); writeError = undefined;
+  status('Starting microphone…', 'starting'); live.clear(); renderText(''); if (mini) void setView(true, false);
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
-    if (cancelled) { release(); status('Ready', 'idle'); return; }
-    sessionId = await invoke('begin_recording');
     if (cancelled) { release(); status('Ready', 'idle'); return; }
     const mimeType = ['audio/webm;codecs=opus', 'audio/webm'].find(t => MediaRecorder.isTypeSupported(t));
     if (!mimeType) throw Error('This WebView does not support WebM audio recording.');
     recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 64000 }); writes = Promise.resolve(); writeError = undefined;
-    const id = sessionId;
+    const queuedAudio = [];
     recorder.ondataavailable = ({ data }) => {
       if (!data.size) return;
-      writes = writes.then(async () => { await invoke('append_audio', { id, bytes: Array.from(new Uint8Array(await data.arrayBuffer())) }); }).catch(error => { writeError = error; if (state === 'recording') void stop(); });
+      const encoded = data.arrayBuffer().then(buffer => Array.from(new Uint8Array(buffer)));
+      writes = writes.then(async () => {
+        const bytes = await encoded;
+        if (!sessionId) { queuedAudio.push(bytes); return; }
+        await invoke('append_audio', { id: sessionId, bytes });
+      }).catch(error => { writeError = error; if (state === 'recording') void stop(); });
     };
     recorder.onerror = event => { writeError = event.error || Error('Microphone recorder failed.'); if (state === 'recording') void stop(); };
     stream.getAudioTracks()[0].onended = () => { if (state === 'recording') void stop(); };
-    recorder.start(1000); renderText('Listening…'); status('Recording · Ctrl+Shift+Space to stop', 'recording'); beep(true);
+    recorder.start(250); renderText('Listening…'); status('Recording · Ctrl+Shift+Space to stop', 'recording'); beep(true);
     timer = setTimeout(() => void stop(), 10 * 60 * 1000);
-    void connectRealtime(id, stream).catch(error => { if (sessionId !== id) return; peer?.close(); peer = undefined; if (state === 'recording') status(`Recording locally · ${error.message || error}`); });
+    storageTask = (async () => {
+      const id = await invoke('begin_recording');
+      sessionId = id;
+      writes = writes.then(async () => { for (const bytes of queuedAudio.splice(0)) await invoke('append_audio', { id, bytes }); });
+      await writes;
+      if (state === 'recording') void connectRealtime(id, stream).catch(error => { if (sessionId !== id) return; peer?.close(); peer = undefined; if (state === 'recording') status(`Recording locally · ${error.message || error}`); });
+    })();
+    await storageTask;
   } catch (error) { await fail(error); }
 }
 
@@ -111,7 +139,7 @@ async function stop() {
   saveTask = (async () => {
     const active = recorder;
     if (active?.state !== 'inactive') await new Promise(resolve => { active.onstop = resolve; active.stop(); });
-    release(); beep(false); await writes; recorder = undefined;
+    release(); beep(false); await storageTask; await writes; recorder = undefined;
     if (writeError) throw writeError;
     status('Audio saved', 'idle'); void setView(true, true); await flushPendingPaste();
   })();
