@@ -22,8 +22,8 @@ await page.addInitScript(() => {
     addTrack() {} createDataChannel() { return {}; } async createOffer() { return { sdp: 'synthetic offer' }; }
     async setLocalDescription() {} async setRemoteDescription() {} close() {}
   };
-  const quick = '## Launch documentation\n\t\t- Publish **Monday**, under 200 words.\n\t\t- <img src=x onerror="window.unsafe=true">Keep the stated deadline.\n\n## Hints\n\t\t- [hint: Check the final draft against the deadline and every stated constraint before sharing it.]';
-  const pro = '## Launch documentation\n\t\t- Publish **Monday**, under 200 words.\n\n\t\t### Suggested approach\n\t\t\t\t- Draft the main goal, then remove repetition.\n\t\t\t\t- Ask a reader to check clarity.\n\n\t\t### Suggested checks\n\t\t\t\t- Count words and verify the deadline.\n\n## Hints\n\t\t- [hint: Write the main point first, then use the remaining words for essential supporting details.]\n\t\t- [hint: Ask someone unfamiliar with the task to read the draft and flag unclear instructions.]\n\t\t- [hint: Check the final draft against the deadline and every stated constraint before sharing it.]';
+  const quick = '## Launch documentation\n  - Publish **Monday**, under 200 words.\n  - <img src=x onerror="window.unsafe=true">Keep the stated deadline.\n\n## Hints\n  - Check the final draft against the deadline and every stated constraint before sharing it.';
+  const pro = '## Launch documentation\n  - Publish **Monday**, under 200 words.\n\n  ### Suggested approach\n  - Draft the main goal, then remove repetition.\n  - Ask a reader to check clarity.\n\n  ### Suggested checks\n  - Count words and verify the deadline.\n\n## Hints\n  - Write the main point first, then use the remaining words for essential supporting details.\n  - Ask someone unfamiliar with the task to read the draft and flag unclear instructions.\n  - Check the final draft against the deadline and every stated constraint before sharing it.';
   window.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' } }, transformCallback: () => 1, invoke: async (name, args) => {
     smoke.calls.push([name, args]);
     if (name === 'startup_status') return 'Ready · Ctrl+Shift+Space';
@@ -31,7 +31,7 @@ await page.addInitScript(() => {
     if (name === 'plugin:window|set_size') return resizeWidget(args.value.size);
     if (name === 'begin_recording') return 'renderer-smoke';
     if (name === 'connect_realtime') return 'synthetic answer';
-    if (name === 'finish_recording') { await new Promise(resolve => setTimeout(resolve, 30)); return { text: args.mode === 'pro' ? pro : quick, intent: 'request', model: 'gpt-6.1-sol', reasoning: args.mode === 'pro' ? 'high' : 'low' }; }
+    if (name === 'finish_recording') { await new Promise(resolve => setTimeout(resolve, 30)); return { text: args.mode === 'pro' ? pro : quick, intent: 'request', model: 'gpt-6.1-sol', reasoning: 'high' }; }
     if (name === 'capture_paste_target') return 321;
     if (name === 'paste_result') return true;
     if (['append_audio', 'copy_result', 'set_tray_state', 'recording_beep'].includes(name)) return;
@@ -47,6 +47,7 @@ try {
   await page.waitForFunction(() => document.getElementById('orb').dataset.state === 'recording');
   await page.locator('#record').click();
   await page.waitForFunction(() => document.getElementById('status').textContent.includes('Quick · copied and pasted'));
+  assert.match(await page.locator('#engine').textContent(), /Idle · no task assigned · mic ready/);
   assert.ok(await page.locator('#popover h2').count());
   assert.equal(await page.locator('#popover img, #popover script, #popover [onerror], #popover pre').count(), 0);
   assert.equal(await page.evaluate(() => !!window.unsafe), false);
@@ -66,7 +67,7 @@ try {
     copied: smoke.calls.filter(([name]) => name === 'copy_result').length,
     pasted: smoke.calls.filter(([name]) => name === 'paste_result').map(([, args]) => args.target),
     heading: document.querySelector('#text h2').textContent,
-    hints: document.getElementById('text').textContent.match(/\[hint:/g)?.length,
+    hints: Array.from(document.querySelectorAll('#text h2')).find(node => node.textContent === 'Hints')?.nextElementSibling.querySelectorAll('li').length,
     metadata: document.getElementById('model').textContent,
     black: getComputedStyle(document.getElementById('panel')).backgroundColor,
     headerFits: document.getElementById('dragbar').scrollWidth <= document.getElementById('dragbar').clientWidth
@@ -75,6 +76,8 @@ try {
   assert.equal(result.copied, 2); assert.deepEqual(result.pasted, [321, 321]); assert.equal(result.hints, 3);
   assert.equal(result.metadata, 'gpt-6.1-sol · high reasoning');
   assert.equal(result.black, 'rgb(0, 0, 0)'); assert.equal(result.headerFits, true); assert.deepEqual(errors, []);
+  await page.locator('#mic').click();
+  assert.match(await page.locator('#engine').textContent(), /Idle · no task assigned · mic off/);
   console.log(JSON.stringify(result));
 } finally {
   await browser.close();

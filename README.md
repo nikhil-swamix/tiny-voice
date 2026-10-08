@@ -11,13 +11,15 @@ Tiny Voice is a floating Windows voice widget that turns speech into structured 
 - Add a short, task-specific hint to each processed transcript.
 - Choose **Quick** for concise, faithful task notes, or **Pro** for expanded steps, suggested checks and contextual tips.
 - Press **Turbo** in the mini bar to upgrade the latest transcript to Pro on demand, without recording again.
-- Render both modes as safe Markdown with titled sections and subsections. Copied notes use pairs of literal tabs for indentation and one bullet per point.
+- Render both modes as standard Markdown with titled sections and subsections, two-space indentation and one bullet per point. Hints are ordinary bullets under a Hints heading.
 - Watch the live voice meter; microphone gain and noise suppression help normalize speech capture.
+- Keep the microphone ready for up to five minutes after recording for a faster next start. Release it immediately with **Release mic**.
+- Show clear engine status: idle with no task assigned, recording, saving, or refining output.
 - Copy and paste the finished note back into the most recently active app.
 - Collapse to a compact floating view on focus loss or after a transcript finishes. Click it to expand.
 - Save audio and transcript history locally, with a tray icon for quick access.
 
-OpenAI is used for transcription and transcript formatting. Both output modes use `gpt-6.1-sol`: Quick uses low reasoning effort, and Pro uses high effort. Quick preserves the spoken task and adds one hint; Pro adds clearly marked suggested approaches and three hints. It builds a task brief without answering the spoken request or performing tasks. Pro suggestions come from the model's general knowledge, without live research. To preserve context, postprocessing sends the current transcript, the saved transcript archive, and the latest ten transcripts to the OpenAI API. Local audio files remain in the recordings folder; audio is also sent to OpenAI for transcription. The API key is read from `OPENAI_API_KEY` at launch and is never placed in the WebView.
+OpenAI is used for transcription and transcript formatting. Both output modes use `gpt-6.1-sol` with **high** reasoning effort and the same generous output limit. Quick preserves the spoken task and adds one hint; Pro adds clearly marked suggested approaches and three hints. The engine refines only the output against the spoken requirements and preferences. It builds a task brief without answering the spoken request or performing tasks. Speech with no actionable assignment is formatted as a greeting, statement or observation, with no invented plan or completion hints. Pro suggestions come from the model's general knowledge, without live research. To preserve context, postprocessing sends the current transcript, the saved transcript archive, and the latest ten transcripts to the OpenAI API. Local audio files remain in the recordings folder; audio is also sent to OpenAI for transcription. The API key is read from `OPENAI_API_KEY` at launch and is never placed in the WebView.
 
 ## Run on Windows
 
@@ -38,6 +40,8 @@ The app stores recordings and transcripts in `%LOCALAPPDATA%/com.local.tinyvoice
 Stopping a recording processes it in the selected mode, renders it, and copies and pastes the exact finished Markdown into the app captured when recording began. Turbo does the same for its upgraded output, using the app active before the Turbo click. Quick and Pro variants are saved as separate Markdown files; upgrades reuse the original raw transcript and do not duplicate history. Recording remains available while processing runs. A failed Pro upgrade keeps the existing output.
 
 The expanded view shows the model identifier and reasoning effort returned by the provider for that output. Missing metadata is marked unverified. The requested settings are separate from this returned metadata.
+
+At launch, the app prepares the microphone for up to five minutes when permission is available. After recording stops, the recorder, live connection and voice meter close while the microphone stream stays open for up to five minutes. Idle audio is not saved or transmitted. The next recording reuses this stream. Windows manages device sharing and preemption; a device mute or ended event releases our stream, and any captured recording is saved. **Release mic** also stops an active recording safely. Hiding an idle widget, quitting, or reaching the five-minute limit releases the stream. A later recording reacquires it.
 
 ## Product images
 

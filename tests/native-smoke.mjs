@@ -23,11 +23,13 @@ const state = await page.evaluate(async () => {
     secure: isSecureContext,
     audio: !!navigator.mediaDevices?.getUserMedia,
     rtc: typeof RTCPeerConnection === 'function',
-    status: document.getElementById('status').textContent
+    status: document.getElementById('status').textContent,
+    engine: document.getElementById('engine').textContent
   };
 });
 assert.equal(state.visible,true); assert.equal(state.record,'Record'); assert.equal(state.overflow,false);
 assert.ok(state.secure && state.audio && state.rtc);
+assert.match(state.engine, /Idle · no task assigned · mic (off|ready)/);
 await page.screenshot({ path: 'widget-preview.png', omitBackground: true });
 console.log(JSON.stringify(state));
 await browser.close();

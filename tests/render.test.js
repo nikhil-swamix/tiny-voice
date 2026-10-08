@@ -15,3 +15,9 @@ test('duplicate list symbols are removed without changing Markdown emphasis or f
   const normalized = markdownForDisplay(text);
   assert.match(normalized, /^- Keep \*\*this\*\*$/m); assert.match(normalized, /\n\t\tconst x = 1;/);
 });
+test('new two-space output is standard Markdown without a custom rendering pass', () => {
+  const text = '  ## Launch\n\n  - Publish **Monday**.\n\n  ### Checks\n\n  - Count words.\n\n  ## Hints\n\n  - Verify the result before delivery.';
+  const html = marked.parse(text);
+  assert.match(html, /<h2>Launch<\/h2>/); assert.match(html, /<h3>Checks<\/h3>/);
+  assert.equal((html.match(/<li>/g) || []).length, 3); assert.ok(!html.includes('<pre>'));
+});

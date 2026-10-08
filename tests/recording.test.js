@@ -2,12 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { createMicrophone } from '../src/microphone.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function harness(options = {}) {
-  const calls = [], nodes = new Map(), track = { stop() { calls.push(['mic-stopped']); } };
+  const calls = [], nodes = new Map();
+  const makeMedia = () => {
+    const track = { readyState: 'live', muted: false, stop() { this.readyState = 'ended'; calls.push(['mic-stopped']); } };
+    return { getAudioTracks: () => [track], getTracks: () => [track] };
+  };
   let sessions = 0, copies = 0;
-  const media = { getAudioTracks: () => [track], getTracks: () => [track] };
+  const media = makeMedia(); let micRequests = 0;
   const get = id => {
     if (!nodes.has(id)) nodes.set(id, { dataset: {}, innerHTML: '', textContent: '', scrollHeight: 0, classList: { toggle() {} }, setAttribute() {}, addEventListener() {}, querySelectorAll() { return id === 'modes' ? ['quick', 'pro'].map(mode => { const node = get(mode); node.dataset.mode = mode; return node; }) : []; } });
     return nodes.get(id);
@@ -36,8 +41,9 @@ async function harness(options = {}) {
   const source = (await readFile(new URL('../src/main.js', import.meta.url), 'utf8')).replace(/^import .*;\r?\n/gm, '');
   const app = await vm.runInNewContext(`(async()=>{${source}\nreturn { toggle, start, stop, quit, processLast, get state(){return state} };})()`, {
     invoke, listen: async () => {}, waveformUrl: 'wave.svg', getCurrentWindow: () => ({ setSize: async () => {} }), LogicalSize: class {}, createIdleFade: () => ({ wake() {}, dispose() {} }), createVoiceMeter: () => () => {}, renderMarkdown: text => text,
+    createMicrophone: args => createMicrophone({ ...args, schedule: (fn, delay) => { const timer = setTimeout(fn, delay); timer.unref(); return timer; } }),
     document: { getElementById: get, body: { classList: { toggle() {} } }, addEventListener() {} }, window: { screen: { availHeight: 800 }, addEventListener() {} },
-    navigator: { mediaDevices: { getUserMedia: options.getMedia || (async () => media) }, clipboard: {} },
+    navigator: { mediaDevices: { getUserMedia: options.getMedia || (async () => { calls.push(['mic-request']); return micRequests++ ? makeMedia() : media; }) }, clipboard: {} },
     localStorage: { getItem: () => options.mode || 'quick', setItem() {} },
     MediaRecorder: Recorder, RTCPeerConnection: Peer, Blob, Uint8Array, setTimeout, clearTimeout, queueMicrotask, requestAnimationFrame: fn => setTimeout(fn, 0), cancelAnimationFrame: clearTimeout, console
   });
@@ -45,13 +51,14 @@ async function harness(options = {}) {
 }
 const settle = async () => { for (let i = 0; i < 5; i++) await tick(); };
 
-test('stop waits for the last audio chunk before transcription and releases microphone', async () => {
+test('stop waits for the last audio chunk and keeps microphone ready without recording', async () => {
   const { app, calls, nodes } = await harness(); await app.start(); await app.stop(); await settle();
   assert.equal(app.state, 'idle'); assert.equal(nodes.get('text').innerHTML, 'Clean transcript');
   assert.ok(calls.findIndex(([name]) => name === 'finish_recording') > calls.findIndex(([name]) => name === 'disk-written'));
-  assert.ok(calls.some(([name]) => name === 'mic-stopped'));
+  assert.ok(!calls.some(([name]) => name === 'mic-stopped'));
   assert.deepEqual(calls.filter(([name]) => name === 'recording_beep').map(([, args]) => args.started), [true, false]);
-  assert.ok(calls.findIndex(([name, args]) => name === 'recording_beep' && !args.started) > calls.findIndex(([name]) => name === 'mic-stopped'));
+  assert.ok(calls.findIndex(([name, args]) => name === 'recording_beep' && !args.started) > calls.findIndex(([name]) => name === 'peer-closed'));
+  assert.match(nodes.get('engine').textContent, /Idle · no task assigned · mic ready/);
   assert.ok(calls.some(([name]) => name === 'copy_result')); assert.ok(calls.some(([name]) => name === 'paste_result'));
 });
 test('same hotkey cancels a pending microphone start', async () => {
@@ -123,4 +130,25 @@ test('a clipboard error does not poison delivery of the next transcript', async 
   await app.start(); await app.stop(); await settle();
   assert.equal(calls.filter(([name]) => name === 'paste_result').length, 1);
   assert.match(nodes.get('status').textContent, /copied and pasted/);
+});
+test('a second recording reuses the warm microphone and Release mic frees it', async () => {
+  const { app, calls, nodes } = await harness({ unique: true });
+  await app.start(); await app.stop(); await settle(); await app.start(); await app.stop(); await settle();
+  assert.equal(calls.filter(([name]) => name === 'mic-request').length, 1);
+  nodes.get('mic').onclick();
+  assert.equal(calls.filter(([name]) => name === 'mic-stopped').length, 1);
+  assert.match(nodes.get('engine').textContent, /Idle · no task assigned · mic off/);
+});
+test('device preemption releases a warm microphone and the next recording acquires it again', async () => {
+  const { app, calls, nodes, media } = await harness({ unique: true });
+  await app.start(); await app.stop(); await settle(); media.getAudioTracks()[0].onmute();
+  assert.match(nodes.get('engine').textContent, /mic off/);
+  await app.start(); assert.equal(calls.filter(([name]) => name === 'mic-request').length, 2);
+  await app.stop(); nodes.get('mic').onclick();
+});
+test('losing the mic while recording saves captured audio and leaves it released', async () => {
+  const { app, calls, nodes, media } = await harness(); await app.start();
+  media.getAudioTracks()[0].onended(); await settle();
+  assert.equal(app.state, 'idle'); assert.ok(calls.some(([name]) => name === 'disk-written'));
+  assert.ok(calls.some(([name]) => name === 'finish_recording')); assert.match(nodes.get('engine').textContent, /mic off/);
 });

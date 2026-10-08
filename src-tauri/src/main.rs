@@ -87,7 +87,7 @@ async fn load_history(b: &Backend, id: &str) -> Result<Vec<Value>, String> {
     let history = { let _guard = b.history_lock.lock().await; load_history(&b, &id).await? };
     let result: Result<(String, String, Option<String>, Option<String>), String> = async {
         let response: Value = checked(b.client.post("https://api.openai.com/v1/responses").bearer_auth(key(&b)?)
-            .json(&processing::request(&raw, &history, mode)).timeout(Duration::from_secs(if mode == "pro" { 240 } else { 120 }))
+            .json(&processing::request(&raw, &history, mode)).timeout(Duration::from_secs(240))
             .send().await.map_err(err)?).await?.json().await.map_err(err)?;
         if response["status"] == "incomplete" { return Err("Processing reached its output limit; try Turbo for a larger output.".into()); }
         let mut text = String::new();

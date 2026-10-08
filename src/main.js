@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
 import { createIdleFade } from './idle.js';
 import { createVoiceMeter } from './meter.js';
+import { createMicrophone } from './microphone.js';
 import { renderMarkdown } from './render.js';
 import waveformUrl from './assets/waveform.svg';
 
@@ -15,6 +16,11 @@ let meterStop, liveFrame;
 let outputMode = 'quick';
 try { if (localStorage.getItem('outputMode') === 'pro') outputMode = 'pro'; } catch {}
 const inflight = new Map(), targets = new Map();
+const microphone = createMicrophone({
+  getMedia: () => navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false }),
+  onChange: () => updateEngine(),
+  onLost: () => { if (state === 'recording') { $('status').textContent = 'Microphone unavailable · saving captured audio'; void stop(false); } else if (state === 'starting') cancelled = true; }
+});
 $('waveicon').src = waveformUrl;
 function setView(compact, dim = false, height = 108, width = 180) {
   mini = compact; miniDim = compact && dim; miniHeight = Math.max(108, Math.floor(height)); miniWidth = Math.max(180, Math.floor(width));
@@ -49,6 +55,17 @@ function updateOutputControls() {
   $('turbo').disabled = !sessionId || inflight.has(sessionId) || ['recording', 'starting', 'stopping'].includes(state);
   $('turbo').setAttribute('aria-busy', String(inflight.has(sessionId)));
   for (const button of $('modes').querySelectorAll('button')) button.setAttribute('aria-pressed', String(button.dataset.mode === outputMode));
+  updateEngine();
+}
+function updateEngine() {
+  const activity = ({ starting: 'Starting microphone', recording: 'Recording your task', stopping: 'Saving audio', error: 'Waiting for a new recording' })[state]
+    || (inflight.size ? 'Refining output · high reasoning' : 'Idle · no task assigned');
+  const micState = microphone.ready ? 'mic ready' : 'mic off';
+  $('engine').textContent = `${activity} · ${micState}`;
+  $('meter').title = `${activity} · ${micState}`; $('meter').dataset.mic = microphone.ready ? 'ready' : 'off';
+  $('mic').disabled = !microphone.ready || ['starting', 'stopping'].includes(state);
+  $('mic').textContent = microphone.ready ? 'Release mic' : 'Mic off';
+  $('mic').title = state === 'recording' ? 'Stop recording and release the microphone' : 'Release the microphone now; it otherwise stays ready for up to five minutes';
 }
 const status = (message, next = state) => {
   state = next; $('status').textContent = message; $('orb').dataset.state = next; $('orb').title = next === 'recording' ? 'Stop recording' : 'Start recording';
@@ -58,7 +75,7 @@ const status = (message, next = state) => {
   updateOutputControls();
   void invoke('set_tray_state', { recording: next === 'recording' }).catch(() => {});
 };
-const release = () => { clearTimeout(timer); cancelAnimationFrame(liveFrame); liveFrame = undefined; meterStop?.(); meterStop = undefined; peer?.close(); peer = undefined; stream?.getTracks().forEach(t => t.stop()); stream = undefined; };
+const release = (keepMic = false) => { clearTimeout(timer); cancelAnimationFrame(liveFrame); liveFrame = undefined; meterStop?.(); meterStop = undefined; peer?.close(); peer = undefined; if (keepMic) microphone.idle(); else microphone.release(); stream = undefined; };
 const beep = started => { void invoke('recording_beep', { started }).catch(() => {}); };
 const fail = async error => { release(); status(String(error?.message || error), 'error'); };
 
@@ -89,7 +106,7 @@ async function start() {
   $('model').hidden = true; $('popover').title = '';
   const targetTask = invoke('capture_paste_target').catch(() => 0);
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    stream = await microphone.get();
     if (cancelled) { release(); status('Ready', 'idle'); return; }
     const mimeType = ['audio/webm;codecs=opus', 'audio/webm'].find(t => MediaRecorder.isTypeSupported(t));
     if (!mimeType) throw Error('This WebView does not support WebM audio recording.');
@@ -105,7 +122,6 @@ async function start() {
       }).catch(error => { writeError = error; if (state === 'recording') void stop(); });
     };
     recorder.onerror = event => { writeError = event.error || Error('Microphone recorder failed.'); if (state === 'recording') void stop(); };
-    stream.getAudioTracks()[0].onended = () => { if (state === 'recording') void stop(); };
     recorder.start(250); meterStop = createVoiceMeter(stream, $('meter')); renderText('Listening…'); status('Recording · Ctrl+Shift+Space to stop', 'recording'); beep(true);
     timer = setTimeout(() => void stop(), 10 * 60 * 1000);
     storageTask = (async () => {
@@ -116,7 +132,7 @@ async function start() {
       if (state === 'recording') void connectRealtime(id, stream).catch(error => { if (sessionId !== id) return; peer?.close(); peer = undefined; if (state === 'recording') status(`Recording locally · ${error.message || error}`); });
     })();
     await storageTask;
-  } catch (error) { await fail(error); }
+  } catch (error) { if (cancelled) { release(); status('Recording cancelled', 'idle'); } else await fail(error); }
 }
 
 async function processLast(id = sessionId, mode = outputMode, targetTask = targets.get(id)) {
@@ -163,13 +179,13 @@ function flushPendingPaste() {
   return delivery;
 }
 
-async function stop() {
+async function stop(keepMic = true) {
   if (state !== 'recording') return;
   status('Saving audio…', 'stopping'); clearTimeout(timer);
   saveTask = (async () => {
     const active = recorder;
     if (active?.state !== 'inactive') await new Promise(resolve => { active.onstop = resolve; active.stop(); });
-    release(); beep(false); await storageTask; await writes; recorder = undefined;
+    release(keepMic && !quitting); beep(false); await storageTask; await writes; recorder = undefined;
     if (writeError) throw writeError;
     status('Audio saved', 'idle'); void setView(true, true); await flushPendingPaste();
   })();
@@ -186,6 +202,7 @@ async function quit() {
 }
 const toggle = () => { idle.wake(); if (state === 'starting') cancelled = true; else if (state === 'recording') void stop(); else if (state === 'idle' || state === 'error') void start(); };
 $('orb').onclick = $('record').onclick = toggle;
+$('mic').onclick = () => { if (state === 'recording') void stop(false); else microphone.release(); };
 $('turbo').onclick = () => { idle.wake(); void processLast(sessionId, 'pro', invoke('capture_paste_target').catch(() => 0)); };
 for (const button of $('modes').querySelectorAll('button')) button.onclick = () => {
   outputMode = button.dataset.mode; try { localStorage.setItem('outputMode', outputMode); } catch {} updateOutputControls();
@@ -194,10 +211,12 @@ $('folder').onclick = () => void invoke('open_audio_folder').catch(fail);
 $('dragbar').onpointerdown = event => { if (event.button === 0 && !event.target.closest('button')) void win.startDragging().catch(fail); };
 $('resize').onpointerdown = event => { if (event.button === 0) void win.startResizeDragging('SouthEast').catch(fail); };
 $('minimize').onclick = () => void setView(true, false);
-$('hide').onclick = () => void win.hide().catch(fail);
+$('hide').onclick = () => { if (state !== 'recording' && state !== 'stopping') { cancelled = state === 'starting'; microphone.release(); } void win.hide().catch(fail); };
 $('panel').addEventListener('click', event => { if (mini && !event.target.closest('button')) void setView(false); });
 window.addEventListener('blur', () => { void setView(true, true); });
+window.addEventListener('pagehide', () => microphone.release());
 await listen('quit-requested', () => void quit());
 await listen('widget-shown', () => { idle.wake(); void setView(false); });
 await listen('toggle-recording', toggle);
 status(await invoke('startup_status'));
+void microphone.get().then(() => { if (state === 'idle' && !quitting) microphone.idle(); }).catch(() => { if (state === 'idle') updateEngine(); });

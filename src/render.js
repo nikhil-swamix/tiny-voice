@@ -1,8 +1,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
-// Double tabs belong to the portable output. Remove them for Markdown display,
-// where eight spaces would otherwise turn a section into a code block.
+// Older saved notes used literal tabs. New notes use ordinary two-space Markdown.
 export function markdownForDisplay(text) {
   let fence = false;
   return text.normalize('NFC').replace(/\r\n?/g, '\n').split('\n').map(line => {
