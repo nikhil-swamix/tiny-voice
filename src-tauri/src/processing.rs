@@ -6,6 +6,8 @@ use std::{collections::HashSet, time::{Duration, Instant}};
 /// prompt cannot change the response contract or bypass validation.
 pub const DEFAULT_PROMPT: &str = include_str!("../prompts/formatting.txt");
 pub const MAX_PROMPT_BYTES: usize = 20_000;
+pub const RECOVERY_PROMPT: &str = r#"<role>Clean one dictated transcript faithfully. Return exactly one leaf field. Do not nest, repeat, or add commentary.</role>
+<output_contract>The response is the strict JSON object required by the schema. fields must contain exactly one leaf: {"key":"message","value":"the complete cleaned text","children":[]}. Preserve names, numbers, negation, uncertainty, and self-corrections. No groups, arrays, Markdown, or JSON text in values. Choose intent from the speech.</output_contract>"#;
 const INTENTS: [&str; 6] = ["question", "request", "command", "statement", "greeting", "other"];
 
 pub fn validate_prompt(prompt: &str) -> Result<(), String> {
@@ -18,12 +20,26 @@ pub fn validate_prompt(prompt: &str) -> Result<(), String> {
 }
 
 fn output_schema() -> Value {
-    let child = json!({"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"}},"required":["key","value"],"additionalProperties":false});
+    // Explicit depth levels keep the schema strict-compatible. Root fields are
+    // leaves, two-level groups, or three-level groups; deeper trees fail here
+    // and in native validation.
+    let leaf = json!({"type":"object","properties":{
+        "key":{"type":"string","description":"Nonempty key, unique within its mapping"},
+        "value":{"type":"string","description":"Nonempty string value"},
+        "children":{"type":"array","maxItems":0,"items":{"type":"object"}}
+    },"required":["key","value","children"],"additionalProperties":false});
+    let group2 = json!({"type":"object","properties":{
+        "key":{"type":"string","description":"Nonempty group key, unique within its mapping"},
+        "value":{"type":"null"},
+        "children":{"type":"array","minItems":2,"items":leaf}
+    },"required":["key","value","children"],"additionalProperties":false});
+    let group3 = json!({"type":"object","properties":{
+        "key":{"type":"string","description":"Nonempty group key, unique within its mapping"},
+        "value":{"type":"null"},
+        "children":{"type":"array","minItems":2,"items":group2}
+    },"required":["key","value","children"],"additionalProperties":false});
     json!({"type":"object","properties":{
-        "fields":{"type":"array","minItems":1,"items":{"anyOf":[
-            {"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"},"children":{"type":"array","maxItems":0,"items":child}},"required":["key","value","children"],"additionalProperties":false},
-            {"type":"object","properties":{"key":{"type":"string"},"value":{"type":"null"},"children":{"type":"array","minItems":1,"items":child}},"required":["key","value","children"],"additionalProperties":false}
-        ]}},
+        "fields":{"type":"array","minItems":1,"items":{"anyOf":[leaf, group2, group3]}},
         "intent":{"type":"string","enum":INTENTS}
     },"required":["fields","intent"],"additionalProperties":false})
 }
@@ -84,10 +100,7 @@ pub fn document(raw: &str, final_text: &str) -> String {
 struct LogicalOutput { fields: Vec<LogicalField>, intent: String }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LogicalField { key: String, value: Option<String>, #[serde(default)] children: Vec<LogicalChild> }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LogicalChild { key: String, value: String }
+struct LogicalField { key: String, value: Option<String>, #[serde(default)] children: Vec<LogicalField> }
 
 /// Renders one self-contained YAML scalar. Every single-line scalar is double
 /// quoted and escaped so text such as `true`, `123`, `# comment`, `!tag`, or
@@ -161,37 +174,109 @@ fn validate_value(value: &str, scope: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn render_yaml(fields: &[LogicalField]) -> Result<String, String> {
+const MAX_YAML_DEPTH: usize = 3;
+
+/// A one-child group is redundant. Promote its child/value into the parent so
+/// weak local models that emit `message: message: message: "..."` still render
+/// clean YAML. This also keeps the schema's `minItems: 2` guideline recoverable.
+fn normalize_fields(fields: Vec<LogicalField>) -> Vec<LogicalField> {
+    let mut normalized: Vec<LogicalField> = fields.into_iter().map(|mut field| {
+        field.children = normalize_fields(field.children);
+        if field.value.is_none() {
+            while field.children.len() == 1 {
+                let child = field.children.remove(0);
+                field.value = child.value;
+                field.children = child.children;
+            }
+        }
+        field
+    }).collect();
+    let mut unique: Vec<LogicalField> = Vec::with_capacity(normalized.len());
+    for mut field in normalized.drain(..) {
+        if let Some(existing) = unique.iter_mut().find(|item| item.key == field.key) {
+            if existing.children.is_empty() && field.children.is_empty() {
+                if existing.value != field.value {
+                    let mut value = existing.value.take().unwrap_or_default();
+                    if !value.is_empty() { value.push('\n'); }
+                    value.push_str(field.value.as_deref().unwrap_or(""));
+                    existing.value = Some(value);
+                }
+                continue;
+            }
+            if !existing.children.is_empty() && !field.children.is_empty() {
+                let mut children = std::mem::take(&mut existing.children);
+                children.extend(std::mem::take(&mut field.children));
+                existing.children = normalize_fields(children);
+                continue;
+            }
+            let base = field.key.clone();
+            let mut suffix = 2;
+            while unique.iter().any(|item| item.key == field.key) {
+                field.key = format!("{base}_{suffix}");
+                suffix += 1;
+            }
+        }
+        unique.push(field);
+    }
+    unique
+}
+
+fn render_fields(fields: &[LogicalField], indent: &str, depth: usize, parent: Option<&str>, lines: &mut Vec<String>) -> Result<(), String> {
     if fields.is_empty() { return Err("Missing logical fields".into()); }
-    let mut lines = Vec::new();
-    let mut root_keys = HashSet::new();
+    let scope = match depth { 1 => "Root", 2 => "Child", _ => "Nested" };
+    let mut keys = HashSet::new();
     for field in fields {
-        validate_key(&field.key, "Root")?;
-        if !root_keys.insert(field.key.as_str()) { return Err(format!("Duplicate root key: {:?}", field.key)); }
+        validate_key(&field.key, scope)?;
+        if !keys.insert(field.key.as_str()) {
+            return Err(match depth {
+                1 => format!("Duplicate root key: {:?}", field.key),
+                2 => format!("Duplicate child key under {:?}: {:?}", parent.unwrap_or(""), field.key),
+                _ => format!("Duplicate nested key under {:?}: {:?}", parent.unwrap_or(""), field.key),
+            });
+        }
+        let key = yaml_key(&field.key);
         if field.children.is_empty() {
             let value = field.value.as_deref().ok_or_else(|| format!("Field {:?} has no value or child fields", field.key))?;
             validate_value(value, &format!("Field {:?}", field.key))?;
-            lines.push(format!("{}: {}", yaml_key(&field.key), yaml_value(value, "  ")));
+            lines.push(format!("{indent}{key}: {}", yaml_value(value, &format!("{indent}  "))));
             continue;
         }
+        if depth >= MAX_YAML_DEPTH { return Err("YAML nesting is limited to three mappings".into()); }
         if field.value.is_some() {
             return Err(format!("Field {:?} has both a value and child fields", field.key));
         }
-        let mut child_keys = HashSet::new();
-        lines.push(format!("{}:", yaml_key(&field.key)));
-        for child in &field.children {
-            validate_key(&child.key, "Child")?;
-            if !child_keys.insert(child.key.as_str()) { return Err(format!("Duplicate child key under {:?}: {:?}", field.key, child.key)); }
-            validate_value(&child.value, &format!("Child {:?}", child.key))?;
-            lines.push(format!("  {}: {}", yaml_key(&child.key), yaml_value(&child.value, "    ")));
-        }
+        lines.push(format!("{indent}{key}:"));
+        render_fields(&field.children, &format!("{indent}  "), depth + 1, Some(&field.key), lines)?;
     }
+    Ok(())
+}
+
+fn render_yaml(fields: &[LogicalField]) -> Result<String, String> {
+    let mut lines = Vec::new();
+    render_fields(fields, "", 1, None, &mut lines)?;
     Ok(lines.join("\n"))
 }
 
+pub fn response_text(response: &Value) -> Result<String, String> {
+    if response["status"] == "incomplete" { return Err("Processing reached its output limit · audio and raw transcript retained.".into()); }
+    let mut text = String::new();
+    if let Some(output) = response["output"].as_array() {
+        for item in output {
+            if let Some(content) = item["content"].as_array() {
+                for part in content {
+                    if part["type"] == "refusal" { return Err(part["refusal"].as_str().unwrap_or("The model declined this transcript").into()); }
+                    if part["type"] == "output_text" { text.push_str(part["text"].as_str().unwrap_or("")); }
+                }
+            }
+        }
+    }
+    Ok(text)
+}
+
 pub fn format(value: Value) -> Result<(String, String), String> {
-    let output: LogicalOutput = serde_json::from_value(value).map_err(|error| format!("Invalid logical dictation JSON: {error}"))?;
+    let mut output: LogicalOutput = serde_json::from_value(value).map_err(|error| format!("Invalid logical dictation JSON: {error}"))?;
     if !INTENTS.contains(&output.intent.as_str()) { return Err("Unsupported dictation intent".into()); }
+    output.fields = normalize_fields(output.fields);
     let yaml = render_yaml(&output.fields)?;
     Ok((yaml, output.intent))
 }
@@ -235,7 +320,7 @@ fn local_request(body: &Value, preferences: &crate::preferences::Preferences) ->
     if messages.is_empty() { return Err("Local SGLang request has no messages".into()); }
     let maximum = body["max_output_tokens"].as_u64().or_else(|| body["max_tokens"].as_u64()).unwrap_or(4096);
     let mut local = json!({"model":preferences.local_model,"messages":messages,"temperature":0,"stream":false,
-        "max_tokens":maximum.clamp(1,4096),"chat_template_kwargs":{"enable_thinking":false}});
+        "max_tokens":maximum.clamp(1,8192),"chat_template_kwargs":{"enable_thinking":false}});
     if let Some(format) = body["text"]["format"].as_object() {
         let kind = format.get("type").and_then(Value::as_str).ok_or("Local SGLang text format has no type")?;
         match kind {
@@ -379,6 +464,33 @@ mod tests {
     }
 
     #[test]
+    fn redundant_single_child_groups_are_flattened() {
+        let input = json!({"fields":[{"key":"message","value":null,"children":[
+            {"key":"message","value":null,"children":[
+                {"key":"message","value":"Keep this sentence.","children":[]}
+            ]}
+        ]}],"intent":"statement"});
+        let (yaml, _) = format(input).unwrap();
+        assert_eq!(yaml, "message: \"Keep this sentence.\"");
+        let different_key = json!({"fields":[{"key":"styling","value":null,"children":[
+            {"key":"message","value":"Use a darker border.","children":[]}
+        ]}],"intent":"statement"});
+        assert_eq!(format(different_key).unwrap().0, "styling: \"Use a darker border.\"");
+    }
+
+    #[test]
+    fn duplicate_model_keys_are_merged_or_disambiguated() {
+        let input = json!({"fields":[
+            {"key":"message","value":"First sentence.","children":[]},
+            {"key":"message","value":"Second sentence.","children":[]},
+            {"key":"details","value":null,"children":[{"key":"a","value":"one","children":[]},{"key":"x","value":"first","children":[]}]},
+            {"key":"details","value":null,"children":[{"key":"b","value":"two","children":[]},{"key":"y","value":"second","children":[]}]}
+        ],"intent":"statement"});
+        let (yaml, _) = format(input).unwrap();
+        assert_eq!(yaml, "message: |2-\n  First sentence.\n  Second sentence.\ndetails:\n  a: \"one\"\n  x: \"first\"\n  b: \"two\"\n  \"y\": \"second\"");
+    }
+
+    #[test]
     fn custom_instructions_are_sent_unchanged() {
         let preferences = crate::preferences::Preferences::default();
         let body = request_with_preferences("Speech.", "", &preferences, &[], "", "CUSTOM PROMPT\nLine two.");
@@ -389,10 +501,10 @@ mod tests {
     fn multiline_values_use_readable_yaml_block_scalars() {
         let input = json!({"fields":[
             {"key":"notes","value":"first line\nsecond line\n  indented","children":[]},
-            {"key":"details","value":null,"children":[{"key":"steps","value":"one\ntwo"}]}
+            {"key":"details","value":null,"children":[{"key":"steps","value":"one\ntwo"},{"key":"owner","value":"Sam"}]}
         ],"intent":"statement"});
         let (yaml, _) = format(input).unwrap();
-        assert_eq!(yaml, "notes: |2-\n  first line\n  second line\n    indented\ndetails:\n  steps: |2-\n    one\n    two");
+        assert_eq!(yaml, "notes: |2-\n  first line\n  second line\n    indented\ndetails:\n  steps: |2-\n    one\n    two\n  owner: \"Sam\"");
     }
 
     #[test]
@@ -419,21 +531,33 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_and_empty_keys_are_rejected_in_every_mapping() {
+    fn duplicate_keys_are_merged_and_empty_keys_are_rejected() {
         let duplicate_root = json!({"fields":[{"key":"same","value":"one","children":[]},{"key":"same","value":"two","children":[]}],"intent":"statement"});
-        assert!(format(duplicate_root).unwrap_err().contains("Duplicate root key"));
+        assert_eq!(format(duplicate_root).unwrap().0, "same: |2-\n  one\n  two");
         let duplicate_child = json!({"fields":[{"key":"group","value":null,"children":[{"key":"same","value":"one"},{"key":"same","value":"two"}]}],"intent":"statement"});
-        assert!(format(duplicate_child).unwrap_err().contains("Duplicate child key"));
+        assert_eq!(format(duplicate_child).unwrap().0, "group: |2-\n  one\n  two");
         let empty_root = json!({"fields":[{"key":"  ","value":"text","children":[]}],"intent":"statement"});
         assert!(format(empty_root).unwrap_err().contains("must not be empty"));
-        let empty_child = json!({"fields":[{"key":"group","value":null,"children":[{"key":"","value":"text"}]}],"intent":"statement"});
+        let empty_child = json!({"fields":[{"key":"group","value":null,"children":[{"key":"","value":"text"},{"key":"ok","value":"text"}]}],"intent":"statement"});
         assert!(format(empty_child).unwrap_err().contains("must not be empty"));
     }
 
     #[test]
-    fn depth_is_limited_to_two_mappings_and_shapes_are_unambiguous() {
-        let third_level = json!({"fields":[{"key":"group","value":null,"children":[{"key":"child","value":"text","children":[]}]}],"intent":"statement"});
-        assert!(format(third_level).is_err());
+    fn depth_is_limited_to_three_mappings_and_shapes_are_unambiguous() {
+        let three_levels = json!({"fields":[{"key":"deployments","value":null,"children":[
+            {"key":"staging","value":null,"children":[{"key":"endpoint","value":"staging.example.com","children":[]},{"key":"timeout","value":"30 seconds","children":[]}]},
+            {"key":"production","value":null,"children":[{"key":"endpoint","value":"prod.example.com","children":[]},{"key":"timeout","value":"60 seconds","children":[]}]}
+        ]}],"intent":"statement"});
+        let (yaml, _) = format(three_levels).unwrap();
+        assert_eq!(yaml, "deployments:\n  staging:\n    endpoint: \"staging.example.com\"\n    timeout: \"30 seconds\"\n  production:\n    endpoint: \"prod.example.com\"\n    timeout: \"60 seconds\"");
+        let four_levels = json!({"fields":[{"key":"a","value":null,"children":[
+            {"key":"b","value":null,"children":[
+                {"key":"c","value":null,"children":[{"key":"d","value":"text","children":[]},{"key":"e","value":"other","children":[]}]},
+                {"key":"h","value":"sibling","children":[]}
+            ]},
+            {"key":"g","value":"root","children":[]}
+        ]}],"intent":"statement"});
+        assert!(format(four_levels).unwrap_err().contains("three mappings"));
         let both = json!({"fields":[{"key":"group","value":"scalar","children":[{"key":"child","value":"text"}]}],"intent":"statement"});
         assert!(format(both).unwrap_err().contains("both a value and child fields"));
         let empty_both = json!({"fields":[{"key":"group","value":"","children":[{"key":"child","value":"text"}]}],"intent":"statement"});
@@ -452,6 +576,7 @@ mod tests {
         assert_eq!(local["model"], "minicpm5-2b-fp8");
         assert_eq!(local["chat_template_kwargs"]["enable_thinking"], false);
         assert_eq!(local["response_format"]["json_schema"]["schema"]["properties"]["fields"]["type"], "array");
+        assert_eq!(local["response_format"]["json_schema"]["schema"]["properties"]["fields"]["items"]["anyOf"].as_array().unwrap().len(), 3);
         assert_eq!(local["messages"][0]["role"], "system");
         assert_eq!(local["messages"][1]["role"], "user");
         body["input"][0]["content"] = json!([{"type":"input_text","text":"text"},{"type":"input_image","detail":"low"}]);

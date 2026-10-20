@@ -19,14 +19,14 @@ This launch reads the new key. Later Start menu launches inherit Windows environ
 The installer is unsigned, so Windows may show an unknown publisher warning. Download hashes are in `SHA256SUMS.txt`:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 '.\Tiny.Voice_0.3.0_x64-setup.exe'
+Get-FileHash -Algorithm SHA256 '.\Tiny.Voice_0.3.1_x64-setup.exe'
 ```
 
 ## Record
 
 1. Focus the app/field where you want notes pasted.
 2. Press `Ctrl+Shift+Space`, speak, press again to stop. Each action makes a 200 ms beep.
-3. The bar shows provisional Nemotron CPU captions. Stop finalizes that local transcript by default and sends it to the local SGLang/MiniCPM5 profile, which formats shallow YAML. GPT Transcribe is off by default; enable it in Settings to upload original audio for a more accurate transcript. Exact YAML is copied/pasted.
+3. The bar shows provisional Nemotron CPU captions. Stop finalizes that local transcript by default and sends it to the local SGLang/MiniCPM5 profile, which formats dynamic YAML with up to three mapping levels. GPT Transcribe is off by default; enable it in Settings to upload original audio for a more accurate transcript. Exact YAML is copied/pasted.
 
 The microphone icon does the same. Permission is needed before capture. Live connection failure keeps local recording available. Limits: ten minutes and 20 MB per recording.
 
@@ -106,7 +106,7 @@ Native focus inspection uses [Microsoft GetGUIThreadInfo](https://learn.microsof
 
 ## Expanded controls and settings
 
-The toolbar remains available in both views. Settings automatically saves post-processing profile, loopback endpoint/model, GPT Transcribe switch, language and optional cloud controls. The formatting prompt has its own editor and Save/Restore buttons; it is stored as `formatting-prompt.txt` in the recordings folder. The strict YAML schema remains built in. Local formatting is text-only and disables screenshots. Defaults: local SGLang/MiniCPM5, GPT Transcribe off, images off. Per-recording metadata shows measured stage times; cached GPT transcription is 0 ms and local transcription timing covers only the final CPU drain, not prior live inference. Stage sum excludes capture, compaction and persistence.
+The toolbar remains available in both views. Settings automatically saves post-processing profile, loopback endpoint/model, GPT Transcribe switch, language and optional cloud controls. The formatting prompt has its own editor and Save/Restore buttons; it is stored as `formatting-prompt.txt` in the recordings folder. It contains explicit guidelines, JSON-envelope examples and the visible YAML those examples produce. The strict YAML schema remains built in, supports up to three dynamic mapping levels and normalizes redundant one-child groups. Local formatting is text-only and disables screenshots. Defaults: local SGLang/MiniCPM5, GPT Transcribe off, images off. Per-recording metadata shows measured stage times; cached GPT transcription is 0 ms and local transcription timing covers only the final CPU drain, not prior live inference. Stage sum excludes capture, compaction and persistence.
 
 
 The fixed-width expanded panel scrolls within screen-bounded height while the header and toolbar remain visible. Compact mode shows no more than two lines before explicit interaction. The one-minute guide does not replace the existing ten-minute/20 MB recording safety limits. Older saved mode metadata and archive variants remain readable.

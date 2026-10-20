@@ -8,7 +8,7 @@ Developer: **Swamix Global AI Solutions**.
 
 ## Install
 
-1. Download **Tiny.Voice_0.3.0_x64-setup.exe** from [GitHub Releases](https://github.com/nikhil-swamix/tiny-voice/releases/latest).
+1. Download **Tiny.Voice_0.3.1_x64-setup.exe** from [GitHub Releases](https://github.com/nikhil-swamix/tiny-voice/releases/latest).
 2. Run the per-user installer. It creates a Start menu shortcut and downloads WebView2 if missing.
 3. Launch Tiny Voice. The default local pipeline needs no OpenAI key; set one only for GPT Transcribe or the OpenAI formatter. Follow [setup and usage](docs/usage.md).
 
@@ -19,7 +19,7 @@ Windows 10/11 x64 and microphone access are needed. Local formatting requires an
 - **Ctrl+Shift+Space** starts/stops recording, with a 200 ms beep for each action.
 - The app stays in the tray while idle. Recording opens the bar at bottom center; it hides ten seconds after copy/paste finishes. Open the expanded view from the tray to browse saved history.
 - **Faithful dictation** cleans punctuation and obvious filler without answering or executing spoken requests.
-- New output is logical YAML key/value pairs, with at most two mapping levels and readable block scalars for multi-line text. Preserve wording, order, numbers, negation and uncertainty; no invented task steps.
+- New output is logical YAML key/value pairs, with up to three mapping levels chosen dynamically from the content and readable block scalars for multi-line text. There is no fixed field list. Preserve wording, order, numbers, negation and uncertainty; no invented task steps.
 - The formatter prompt is editable in Settings. The strict YAML schema stays built in, so an edited prompt changes instructions, not the response contract.
 - Exact YAML is copied/pasted; legacy Markdown history remains readable.
 - The widget stays 360 logical pixels wide in both views, with a narrower fixed fallback on small screens. Compact mode shows at most two lines; click the preview or expand button to read the full scrollable output. Hover does not expand it.
@@ -62,7 +62,7 @@ The WebView handles capture, streaming, the meter, Markdown and layout. Tauri ha
 
 ## Release
 
-Prepare the installer and documentation before publishing; publish the public release last. [0.3.0 release notes](docs/releases/0.3.0.md).
+Prepare the installer and documentation before publishing; publish the public release last. [0.3.1 release notes](docs/releases/0.3.1.md).
 
 The product image uses illustrative sample text.
 

@@ -287,11 +287,12 @@ async fn history_document(b: &Backend, id: &str) -> PathBuf {
     let result: Result<(String, String, Option<String>, Option<String>), String> = async {
         let auth = if preferences.post_processing_profile == "local-sglang" { b.key.as_deref().unwrap_or("") } else { key(&b)? };
         let corrections = vocabulary::load_corrections(&b.dir)?;
+        let hints = vocabulary::correction_hints(&corrections);
         let summary = {
             let _guard = b.summary_lock.lock().await;
             context::compact(&b.client, auth, &b.dir, &history, &preferences).await?
         };
-        let mut body = processing::request_with_preferences(&raw, &summary, &preferences, &terms, &vocabulary::correction_hints(&corrections), &formatting_prompt);
+        let mut body = processing::request_with_preferences(&raw, &summary, &preferences, &terms, &hints, &formatting_prompt);
         if processing::history_words(&body) >= 500 {
             return Err("Combined compact history and spelling hints exceed the 499-word budget; no formatting request was sent.".into());
         }
@@ -316,14 +317,28 @@ async fn history_document(b: &Backend, id: &str) -> PathBuf {
         audit["model_returned"] = response["model"].clone();
         audit["reasoning_returned"] = response["reasoning"]["effort"].clone();
         audit["input_tokens"] = response["usage"]["input_tokens"].clone();
-        audit_update = Some((audit_path, serde_json::to_vec(&audit).map_err(err)?));
-        if response["status"] == "incomplete" { return Err("Processing reached its output limit · audio and raw transcript retained.".into()); }
-        let mut text = String::new();
-        if let Some(output) = response["output"].as_array() { for item in output { if let Some(content) = item["content"].as_array() { for part in content {
-            if part["type"] == "refusal" { return Err(part["refusal"].as_str().unwrap_or("The model declined this transcript").into()); }
-            if part["type"] == "output_text" { text.push_str(part["text"].as_str().unwrap_or("")); }
-        } } } }
-        let (text, intent) = processing::format(serde_json::from_str(&text).map_err(err)?)?;
+        audit_update = Some((audit_path.clone(), serde_json::to_vec(&audit).map_err(err)?));
+        let parsed = processing::response_text(&response)
+            .and_then(|text| processing::format(serde_json::from_str(&text).map_err(err)?));
+        let (text, intent) = match parsed {
+            Ok(result) => result,
+            Err(first_error) if preferences.post_processing_profile == "local-sglang" => {
+                // A weak local model can degenerate into repeated empty groups.
+                // One single-leaf retry preserves YAML instead of returning raw text.
+                audit["formatting_retry"] = json!(true);
+                let retry_body = processing::request_with_preferences(&raw, &summary, &preferences, &terms, &hints, processing::RECOVERY_PROMPT);
+                let retry = processing::complete(&b.client, b.key.as_deref(), &retry_body, &preferences).await?;
+                formatting_ms = formatting_ms.saturating_add(retry["latency_ms"].as_u64().unwrap_or(0));
+                audit["formatting_ms"] = json!(formatting_ms);
+                audit["retry_status"] = retry["status"].clone();
+                audit["retry_model_returned"] = retry["model"].clone();
+                audit_update = Some((audit_path, serde_json::to_vec(&audit).map_err(err)?));
+                processing::response_text(&retry)
+                    .and_then(|text| processing::format(serde_json::from_str(&text).map_err(err)?))
+                    .map_err(|retry_error| format!("{first_error}; single-leaf retry failed: {retry_error}"))?
+            }
+            Err(first_error) => return Err(first_error),
+        };
         Ok((text, intent, response["model"].as_str().map(str::to_owned), response["reasoning"]["effort"].as_str().map(str::to_owned)))
     }.await;
     b.screens.remove(&id);
