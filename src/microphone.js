@@ -1,6 +1,8 @@
 export function createMicrophone({ getMedia, onChange = () => {}, onLost = () => {}, schedule = setTimeout, cancel = clearTimeout, timeout = 300000 }) {
   let media, pending, pendingGeneration, timer, generation = 0;
-  const ready = () => !!media?.getAudioTracks().some(track => track.readyState !== 'ended' && !track.muted);
+  // A live track can be muted briefly while the device opens or during silence.
+  // Only an ended track means the microphone is unavailable.
+  const ready = () => !!media?.getAudioTracks().some(track => track.readyState === 'live');
   function release(reason = 'released') {
     generation++; cancel(timer); timer = undefined;
     const old = media; media = undefined;
@@ -17,7 +19,7 @@ export function createMicrophone({ getMedia, onChange = () => {}, onLost = () =>
       if (epoch !== generation) { source.getTracks().forEach(track => track.stop()); throw Error('Microphone request cancelled'); }
       media = source;
       const lost = () => { if (media !== source) return; release('unavailable'); onLost(); };
-      for (const track of source.getAudioTracks()) { track.onmute = track.onended = lost; }
+      for (const track of source.getAudioTracks()) track.onended = lost;
       onChange(true, 'ready'); return source;
     });
     pending = request; pendingGeneration = epoch;

@@ -9,7 +9,15 @@ out.mkdir(exist_ok=True)
 installer = out / f'Tiny.Voice_{version}_x64-setup.exe'
 shutil.copy2(root / f'src-tauri/target/release/bundle/nsis/Tiny Voice_{version}_x64-setup.exe', installer)
 portable = out / f'Tiny.Voice_{version}_x64-portable.zip'
-files = [root / 'README.md', *sorted((root / 'docs').rglob('*.md')), *sorted((root / 'screenshots').glob('*.png'))]
+# Public allowlist only. Internal diagnostic briefs, fixtures and local screenshots
+# must never be swept into the portable archive.
+files = [
+    root / 'README.md',
+    root / 'docs/usage.md',
+    root / 'docs/models.md',
+    root / f'docs/releases/{version}.md',
+    root / 'screenshots/product-preview.png',
+]
 with zipfile.ZipFile(portable, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
     archive.write(root / 'src-tauri/target/release/tiny-voice.exe', 'tiny-voice.exe')
     for file in files:
