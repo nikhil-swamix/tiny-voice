@@ -285,14 +285,17 @@ async fn history_document(b: &Backend, id: &str) -> PathBuf {
     let mut audit_update = None;
     let mut formatting_ms = 0;
     let result: Result<(String, String, Option<String>, Option<String>), String> = async {
-        let auth = if preferences.post_processing_profile == "local-sglang" { b.key.as_deref().unwrap_or("") } else { key(&b)? };
+        let local = preferences.post_processing_profile == "local-sglang";
+        let auth = if local { b.key.as_deref().unwrap_or("") } else { key(&b)? };
         let corrections = vocabulary::load_corrections(&b.dir)?;
         let hints = vocabulary::correction_hints(&corrections);
-        let summary = {
+        let summary = if local { String::new() } else {
             let _guard = b.summary_lock.lock().await;
             context::compact(&b.client, auth, &b.dir, &history, &preferences).await?
         };
-        let mut body = processing::request_with_preferences(&raw, &summary, &preferences, &terms, &hints, &formatting_prompt);
+        let context = if local { "" } else { summary.as_str() };
+        let formatting_hints = if local { "" } else { hints.as_str() };
+        let mut body = processing::request_with_preferences(&raw, context, &preferences, &terms, formatting_hints, &formatting_prompt);
         if processing::history_words(&body) >= 500 {
             return Err("Combined compact history and spelling hints exceed the 499-word budget; no formatting request was sent.".into());
         }
@@ -326,7 +329,7 @@ async fn history_document(b: &Backend, id: &str) -> PathBuf {
                 // A weak local model can degenerate into repeated empty groups.
                 // One single-leaf retry preserves YAML instead of returning raw text.
                 audit["formatting_retry"] = json!(true);
-                let retry_body = processing::request_with_preferences(&raw, &summary, &preferences, &terms, &hints, processing::RECOVERY_PROMPT);
+                let retry_body = processing::request_with_preferences(&raw, context, &preferences, &terms, formatting_hints, processing::RECOVERY_PROMPT);
                 let retry = processing::complete(&b.client, b.key.as_deref(), &retry_body, &preferences).await?;
                 formatting_ms = formatting_ms.saturating_add(retry["latency_ms"].as_u64().unwrap_or(0));
                 audit["formatting_ms"] = json!(formatting_ms);
@@ -523,7 +526,7 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 let b = handle.state::<Backend>();
                 let _ = refresh_vocabulary(handle.state::<Backend>()).await;
-                if b.key.is_some() || b.preferences.lock().await.post_processing_profile == "local-sglang" {
+                if b.key.is_some() && b.preferences.lock().await.post_processing_profile == "openai" {
                     let history = { let _guard = b.history_lock.lock().await; load_history(&b, "").await };
                     if let Ok(history) = history {
                         let preferences = b.preferences.lock().await.clone();

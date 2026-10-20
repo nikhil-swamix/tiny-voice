@@ -44,6 +44,21 @@ fn output_schema() -> Value {
     },"required":["fields","intent"],"additionalProperties":false})
 }
 
+/// A recursive node is easier for the small local model than the explicit
+/// three-level union. Native validation still enforces the three-level limit.
+fn local_output_schema() -> Value {
+    json!({"type":"object","$defs":{
+        "node":{"type":"object","properties":{
+            "key":{"type":"string","description":"Nonempty short key"},
+            "value":{"type":["string","null"],"description":"String for a leaf; null for a group"},
+            "children":{"type":"array","items":{"$ref":"#/$defs/node"},"description":"Group children; empty for a leaf"}
+        },"required":["key","value","children"],"additionalProperties":false}
+    },"properties":{
+        "fields":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/node"}},
+        "intent":{"type":"string","enum":INTENTS}
+    },"required":["fields","intent"],"additionalProperties":false})
+}
+
 pub fn request_with_preferences(raw: &str, context: &str, preferences: &crate::preferences::Preferences, vocabulary: &[String], correction_hints: &str, instructions: &str) -> Value {
     let local = preferences.post_processing_profile == "local-sglang";
     json!({"model":if local { &preferences.local_model } else { &preferences.model },"store":false,
@@ -320,16 +335,15 @@ fn local_request(body: &Value, preferences: &crate::preferences::Preferences) ->
     if messages.is_empty() { return Err("Local SGLang request has no messages".into()); }
     let maximum = body["max_output_tokens"].as_u64().or_else(|| body["max_tokens"].as_u64()).unwrap_or(4096);
     let mut local = json!({"model":preferences.local_model,"messages":messages,"temperature":0,"stream":false,
-        "max_tokens":maximum.clamp(1,8192),"chat_template_kwargs":{"enable_thinking":false}});
+        "max_tokens":maximum.clamp(1,1024),"chat_template_kwargs":{"enable_thinking":false}});
     if let Some(format) = body["text"]["format"].as_object() {
         let kind = format.get("type").and_then(Value::as_str).ok_or("Local SGLang text format has no type")?;
         match kind {
             "json_schema" => {
-                let schema = format.get("schema").filter(|schema| schema.is_object()).ok_or("Local SGLang json_schema format has no object schema")?;
                 local["response_format"] = json!({"type":"json_schema","json_schema":{
                     "name":format.get("name").and_then(Value::as_str).unwrap_or("structured_output"),
                     "strict":format.get("strict").and_then(Value::as_bool).unwrap_or(true),
-                    "schema":schema
+                    "schema":local_output_schema()
                 }});
             }
             "text" => {}
@@ -576,7 +590,7 @@ mod tests {
         assert_eq!(local["model"], "minicpm5-2b-fp8");
         assert_eq!(local["chat_template_kwargs"]["enable_thinking"], false);
         assert_eq!(local["response_format"]["json_schema"]["schema"]["properties"]["fields"]["type"], "array");
-        assert_eq!(local["response_format"]["json_schema"]["schema"]["properties"]["fields"]["items"]["anyOf"].as_array().unwrap().len(), 3);
+        assert_eq!(local["response_format"]["json_schema"]["schema"]["$defs"]["node"]["type"], "object");
         assert_eq!(local["messages"][0]["role"], "system");
         assert_eq!(local["messages"][1]["role"], "user");
         body["input"][0]["content"] = json!([{"type":"input_text","text":"text"},{"type":"input_image","detail":"low"}]);

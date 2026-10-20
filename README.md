@@ -8,7 +8,7 @@ Developer: **Swamix Global AI Solutions**.
 
 ## Install
 
-1. Download **Tiny.Voice_0.3.1_x64-setup.exe** from [GitHub Releases](https://github.com/nikhil-swamix/tiny-voice/releases/latest).
+1. Download **Tiny.Voice_0.3.2_x64-setup.exe** from [GitHub Releases](https://github.com/nikhil-swamix/tiny-voice/releases/latest).
 2. Run the per-user installer. It creates a Start menu shortcut and downloads WebView2 if missing.
 3. Launch Tiny Voice. The default local pipeline needs no OpenAI key; set one only for GPT Transcribe or the OpenAI formatter. Follow [setup and usage](docs/usage.md).
 
@@ -62,7 +62,7 @@ The WebView handles capture, streaming, the meter, Markdown and layout. Tauri ha
 
 ## Release
 
-Prepare the installer and documentation before publishing; publish the public release last. [0.3.1 release notes](docs/releases/0.3.1.md).
+Prepare the installer and documentation before publishing; publish the public release last. [0.3.2 release notes](docs/releases/0.3.2.md).
 
 The product image uses illustrative sample text.
 

@@ -19,7 +19,7 @@ This launch reads the new key. Later Start menu launches inherit Windows environ
 The installer is unsigned, so Windows may show an unknown publisher warning. Download hashes are in `SHA256SUMS.txt`:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 '.\Tiny.Voice_0.3.1_x64-setup.exe'
+Get-FileHash -Algorithm SHA256 '.\Tiny.Voice_0.3.2_x64-setup.exe'
 ```
 
 ## Record
@@ -106,7 +106,7 @@ Native focus inspection uses [Microsoft GetGUIThreadInfo](https://learn.microsof
 
 ## Expanded controls and settings
 
-The toolbar remains available in both views. Settings automatically saves post-processing profile, loopback endpoint/model, GPT Transcribe switch, language and optional cloud controls. The formatting prompt has its own editor and Save/Restore buttons; it is stored as `formatting-prompt.txt` in the recordings folder. It contains explicit guidelines, JSON-envelope examples and the visible YAML those examples produce. The strict YAML schema remains built in, supports up to three dynamic mapping levels and normalizes redundant one-child groups. Local formatting is text-only and disables screenshots. Defaults: local SGLang/MiniCPM5, GPT Transcribe off, images off. Per-recording metadata shows measured stage times; cached GPT transcription is 0 ms and local transcription timing covers only the final CPU drain, not prior live inference. Stage sum excludes capture, compaction and persistence.
+The toolbar remains available in both views. Settings automatically saves post-processing profile, loopback endpoint/model, GPT Transcribe switch, language and optional cloud controls. The formatting prompt has its own editor and Save/Restore buttons; it is stored as `formatting-prompt.txt` in the recordings folder. It contains three concise guidelines in about 100 words, including a requirement to extract 3–5 distinct points. The strict YAML schema remains built in, supports up to three dynamic mapping levels and normalizes redundant one-child groups. Local formatting is text-only and disables screenshots. Defaults: local SGLang/MiniCPM5, GPT Transcribe off, images off. Per-recording metadata shows measured stage times; cached GPT transcription is 0 ms and local transcription timing covers only the final CPU drain, not prior live inference. Stage sum excludes capture, compaction and persistence.
 
 
 The fixed-width expanded panel scrolls within screen-bounded height while the header and toolbar remain visible. Compact mode shows no more than two lines before explicit interaction. The one-minute guide does not replace the existing ten-minute/20 MB recording safety limits. Older saved mode metadata and archive variants remain readable.
